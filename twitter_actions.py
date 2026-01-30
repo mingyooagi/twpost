@@ -42,7 +42,8 @@ def like_tweet(url: str) -> bool:
         try:
             print(f"📍 导航到推文页面...")
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_selector('[data-testid="like"]', timeout=30000)
+            # 等待任一按钮出现 (like 或 unlike)
+            page.wait_for_selector('[data-testid="like"], [data-testid="unlike"]', timeout=30000)
             time.sleep(1)
 
             # 检查是否已点赞
@@ -146,7 +147,8 @@ def bookmark_tweet(url: str) -> bool:
         try:
             print(f"📍 导航到推文页面...")
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_selector('[data-testid="bookmark"]', timeout=30000)
+            # 等待任一按钮出现 (bookmark 或 removeBookmark)
+            page.wait_for_selector('[data-testid="bookmark"], [data-testid="removeBookmark"]', timeout=30000)
             time.sleep(1)
 
             # 检查是否已收藏
