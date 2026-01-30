@@ -20,9 +20,22 @@ def is_port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def has_display() -> bool:
-    """Check if a display is available."""
-    return bool(os.environ.get("DISPLAY"))
+def has_real_display() -> bool:
+    """Check if a real (non-virtual) display is available."""
+    display = os.environ.get("DISPLAY", "")
+    # Skip if it's our Xvfb display
+    if display == XVFB_DISPLAY:
+        return False
+    if not display:
+        return False
+    # Try to verify the display is actually working
+    result = subprocess.run(
+        ["xdpyinfo"],
+        capture_output=True,
+        env={**os.environ, "DISPLAY": display},
+        timeout=2
+    )
+    return result.returncode == 0
 
 
 def ensure_xvfb() -> bool:
@@ -49,11 +62,16 @@ def ensure_chrome_cdp() -> bool:
     if is_port_open(CDP_PORT):
         return True
 
-    # Ensure we have a display (real or virtual)
-    if not has_display():
+    # Prefer real display, fall back to Xvfb
+    if has_real_display():
+        display = os.environ.get("DISPLAY")
+        print(f"检测到真实显示器 {display}，使用物理屏幕")
+    else:
         if not ensure_xvfb():
             print("无法启动虚拟显示器")
             return False
+        display = XVFB_DISPLAY
+        print(f"未检测到真实显示器，使用虚拟显示器 {display}")
 
     print(f"CDP 端口 {CDP_PORT} 未开启，正在重启 Chrome...")
 
@@ -62,12 +80,12 @@ def ensure_chrome_cdp() -> bool:
     time.sleep(2)
 
     # Start Chrome with CDP using dedicated profile
-    chrome_data_dir = Path(__file__).parent / ".chrome"
+    chrome_data_dir = Path.home() / ".chrome_bot"
     subprocess.Popen(
         ["google-chrome", f"--remote-debugging-port={CDP_PORT}", f"--user-data-dir={chrome_data_dir}"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", XVFB_DISPLAY)},
+        env={**os.environ, "DISPLAY": display},
     )
 
     # Wait for CDP to be ready
