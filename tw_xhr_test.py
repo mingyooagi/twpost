@@ -31,39 +31,56 @@ async def parse_twitter_response(response_body: str) -> list:
         tweets = []
         
         # Twitter API 响应结构：data.home.home_timeline_urt.instructions
-        if 'data' in data:
-            # 遍历可能的嵌套结构
-            for key, value in data.get('data', {}).items():
-                if isinstance(value, dict):
-                    instructions = value.get('instructions', [])
-                    for instruction in instructions:
-                        if instruction.get('type') == 'TimelineAddEntries':
-                            entries = instruction.get('entries', [])
-                            for entry in entries:
-                                content = entry.get('content', {})
-                                if content.get('entryType') == 'TimelineTimelineItem':
-                                    item_content = content.get('itemContent', {})
-                                    if item_content.get('itemType') == 'TimelineTweet':
-                                        tweet_results = item_content.get('tweet_results', {})
-                                        result = tweet_results.get('result', {})
-                                        if result.get('__typename') == 'Tweet':
-                                            legacy = result.get('legacy', {})
-                                            user = result.get('core', {}).get('user_results', {}).get('result', {}).get('legacy', {})
-                                            
-                                            tweet = {
-                                                'text': legacy.get('full_text', ''),
-                                                'user_name': user.get('name', ''),
-                                                'screen_name': user.get('screen_name', ''),
-                                                'created_at': legacy.get('created_at', ''),
-                                                'favorite_count': legacy.get('favorite_count', 0),
-                                                'retweet_count': legacy.get('retweet_count', 0),
-                                                'id': legacy.get('id_str', ''),
-                                            }
+        if 'data' not in data:
+            return []
+        
+        # 遍历可能的嵌套结构
+        for key, value in data.get('data', {}).items():
+            if isinstance(value, dict):
+                # 尝试多种可能的路径
+                timeline = value.get('home_timeline_urt') or value.get('timeline_urt') or value
+                instructions = timeline.get('instructions', [])
+                
+                for instruction in instructions:
+                    instr_type = instruction.get('type')
+                    
+                    if instr_type == 'TimelineAddEntries':
+                        entries = instruction.get('entries', [])
+                        
+                        for entry in entries:
+                            content = entry.get('content', {})
+                            entry_type = content.get('entryType')
+                            
+                            if entry_type == 'TimelineTimelineItem':
+                                item_content = content.get('itemContent', {})
+                                item_type = item_content.get('itemType')
+                                
+                                if item_type == 'TimelineTweet':
+                                    tweet_results = item_content.get('tweet_results', {})
+                                    result = tweet_results.get('result', {})
+                                    typename = result.get('__typename')
+                                    
+                                    if typename == 'Tweet':
+                                        legacy = result.get('legacy', {})
+                                        user = result.get('core', {}).get('user_results', {}).get('result', {}).get('legacy', {})
+                                        
+                                        tweet = {
+                                            'text': legacy.get('full_text', ''),
+                                            'user_name': user.get('name', ''),
+                                            'screen_name': user.get('screen_name', ''),
+                                            'created_at': legacy.get('created_at', ''),
+                                            'favorite_count': legacy.get('favorite_count', 0),
+                                            'retweet_count': legacy.get('retweet_count', 0),
+                                            'id': legacy.get('id_str', ''),
+                                        }
+                                        if tweet['text']:  # 只添加有内容的推文
                                             tweets.append(tweet)
         
         return tweets
     except Exception as e:
         print(f"❌ 解析响应失败: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return []
 
 async def main():
@@ -97,22 +114,20 @@ async def main():
         async def handle_response(response):
             url = response.url
             if await should_capture(url):
-                print(f"\n🎯 捕获到 API 请求: {url[:100]}...")
+                content_type = response.headers.get('content-type', '')
+                # 只处理 JSON 响应，跳过 JS 文件
+                if 'json' not in content_type:
+                    return
+                
+                print(f"\n🎯 捕获 API: ...{url[-60:]}")
                 try:
                     body = await response.text()
                     tweets = await parse_twitter_response(body)
                     if tweets:
-                        print(f"✅ 提取到 {len(tweets)} 条推文")
-                        for tweet in tweets:
-                            print(f"  📝 @{tweet['screen_name']}: {tweet['text'][:50]}...")
-                            captured_tweets.append(tweet)
-                    else:
-                        print("⚠️  没有提取到推文数据")
-                        # 调试：打印部分响应
-                        if len(body) > 200:
-                            print(f"  响应预览: {body[:200]}...")
+                        print(f"✅ 提取 {len(tweets)} 条推文")
+                        captured_tweets.extend(tweets)
                 except Exception as e:
-                    print(f"  ❌ 处理响应失败: {e}")
+                    print(f"  ❌ 错误: {str(e)[:100]}")
         
         page.on('response', handle_response)
         
@@ -125,8 +140,8 @@ async def main():
             print("  (可能已经在 Twitter 页面，继续监听...)")
         
         # 等待一段时间收集数据
-        print("\n⏳ 监听 30 秒，滚动页面可触发更多请求...")
-        await asyncio.sleep(30)
+        print("\n⏳ 监听 15 秒，滚动页面可触发更多请求...")
+        await asyncio.sleep(15)
         
         # 输出结果
         print(f"\n\n📊 总共捕获 {len(captured_tweets)} 条推文")
