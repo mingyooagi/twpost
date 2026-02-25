@@ -2,6 +2,8 @@
 """Chrome CDP utilities for browser automation."""
 
 import os
+import platform
+import shutil
 import socket
 import subprocess
 import time
@@ -11,6 +13,19 @@ from pathlib import Path
 CDP_PORT = 9222
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 XVFB_DISPLAY = ":99"
+
+
+def find_chrome() -> str | None:
+    """Find Chrome executable path across platforms."""
+    if platform.system() == "Darwin":
+        mac_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        if Path(mac_path).exists():
+            return mac_path
+    # Linux / fallback
+    for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
+        if shutil.which(name):
+            return name
+    return None
 
 
 def wake_screen() -> bool:
@@ -89,47 +104,65 @@ def ensure_xvfb() -> bool:
 
 def ensure_chrome_cdp() -> bool:
     """Ensure Chrome is running with CDP enabled."""
-    # Wake screen first to ensure good performance
-    wake_screen()
-    
     if is_port_open(CDP_PORT):
         return True
 
-    # Prefer real display, fall back to Xvfb
-    if has_real_display():
-        display = os.environ.get("DISPLAY")
-        print(f"检测到真实显示器 {display}，使用物理屏幕")
+    chrome_bin = find_chrome()
+    if not chrome_bin:
+        print("❌ 未找到 Chrome，请先安装 Google Chrome")
+        return False
+
+    is_mac = platform.system() == "Darwin"
+
+    if is_mac:
+        # macOS: no display management needed
+        display = None
     else:
-        if not ensure_xvfb():
-            print("无法启动虚拟显示器")
-            return False
-        display = XVFB_DISPLAY
-        print(f"未检测到真实显示器，使用虚拟显示器 {display}")
+        # Linux: wake screen, manage display
+        wake_screen()
+        if has_real_display():
+            display = os.environ.get("DISPLAY")
+            print(f"检测到真实显示器 {display}，使用物理屏幕")
+        else:
+            if not ensure_xvfb():
+                print("无法启动虚拟显示器")
+                return False
+            display = XVFB_DISPLAY
+            print(f"未检测到真实显示器，使用虚拟显示器 {display}")
 
-    print(f"CDP 端口 {CDP_PORT} 未开启，正在重启 Chrome...")
+    print(f"CDP 端口 {CDP_PORT} 未开启，正在启动 Chrome...")
 
-    # Kill existing Chrome processes (force kill, exclude this script)
-    subprocess.run(["pkill", "-9", "-f", "google-chrome"], capture_output=True)
+    # Kill existing Chrome processes
+    if is_mac:
+        subprocess.run(["pkill", "-9", "-f", "Google Chrome"], capture_output=True)
+    else:
+        subprocess.run(["pkill", "-9", "-f", "google-chrome"], capture_output=True)
     time.sleep(2)
 
     # Start Chrome with CDP using dedicated profile
     chrome_data_dir = Path.home() / ".chrome_bot"
-    # Use headless mode if no real display or if CHROME_HEADLESS is set
+    # Clean up stale lock file left after force kill
+    singleton_lock = chrome_data_dir / "SingletonLock"
+    singleton_lock.unlink(missing_ok=True)
     headless_mode = os.environ.get("CHROME_HEADLESS", "").lower() in ("1", "true", "yes")
     chrome_args = [
-        "google-chrome",
+        chrome_bin,
         f"--remote-debugging-port={CDP_PORT}",
         f"--user-data-dir={chrome_data_dir}",
     ]
-    if headless_mode or display == XVFB_DISPLAY:
+    if headless_mode or (display == XVFB_DISPLAY):
         chrome_args.append("--headless=new")
         print("🔇 使用 Chrome headless 模式")
-    
+
+    env = {**os.environ}
+    if display:
+        env["DISPLAY"] = display
+
     subprocess.Popen(
         chrome_args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env={**os.environ, "DISPLAY": display},
+        env=env,
     )
 
     # Wait for CDP to be ready
